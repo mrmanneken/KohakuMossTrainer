@@ -365,7 +365,47 @@ class MossDataset:
         )
         self._fill_latents(self, batch, items)
         self._fill_text(self, batch, captions)
+        batch.loss_mask = self._loss_mask(items, grid, batch.img_keep)
         return batch
+
+    def _mask_path(self, row_id: int) -> str | None:
+        """The row's mask file (`row.json["mask"]`), absolute or relative to the
+        source's root; None when the row has no mask."""
+        row = self.catalog[row_id]
+        rel = (row.json or {}).get("mask")
+        if not rel:
+            return None
+        if os.path.isabs(rel):
+            return rel
+        src = self.sources[int(self.catalog.source[row_id])]
+        base = getattr(src, "root", None) or getattr(src, "path", "")
+        if os.path.isfile(base):
+            base = os.path.dirname(base)
+        return os.path.join(base, rel)
+
+    def _loss_mask(self, items, grid, keeps) -> torch.Tensor | None:
+        """Per-image-token loss weights in [0, 1], packed like the latents: each
+        item's grayscale mask is cropped like its image, area-averaged onto the latent
+        grid (h, w), flipped with it, flattened row-major and thinned by `img_keep`.
+        Rows without a mask weigh 1 everywhere. None when no row in the batch has
+        a mask and the loss is unmasked."""
+        from PIL import Image
+
+        parts = []
+        for it, (h, w), keep in zip(items, grid, keeps):
+            path = self._mask_path(it.row_id)
+            if path is None:
+                m = torch.ones(h * w, dtype=torch.float32)
+            else:
+                with Image.open(path) as raw:
+                    img = raw.convert("L").crop(it.crop_ltrb)
+                    img = img.resize((w, h), Image.Resampling.BOX)
+                if it.flip:
+                    img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+                arr = np.asarray(img, dtype=np.float32) / 255.0
+                m = torch.from_numpy(arr.reshape(-1).copy())
+            parts.append(m if keep is None else m.index_select(0, keep))
+        return torch.cat(parts)
 
     @staticmethod
     def _gather(found: list, keeps: list) -> torch.Tensor:

@@ -42,11 +42,8 @@ def objective_warnings(k: dict) -> list[str]:
 def objective_problems(k: dict) -> list[str]:
     """LOSS, FP16_FIX='weights', and the components a single-file WEIGHTS needs."""
     p = []
-    if k["LOSS"] == "masked_mse":
-        p.append(
-            "LOSS='masked_mse' needs a per-token loss mask, and no dataset source "
-            "produces one: use LOSS='mse' | 'huber' | 'l1'"
-        )
+    # masked_mse: the dataset fills HostBatch.loss_mask from each row's json "mask"
+    # (rows without one weigh 1 everywhere), see MossDataset._loss_mask.
     if k["FP16_FIX"] == "weights":
         p.append(
             "FP16_FIX='weights' is not a training fix: train an fp16-fix checkpoint "
